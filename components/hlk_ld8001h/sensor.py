@@ -23,7 +23,7 @@ MAX_VALID_DISTANCE = 40000  # mm
 DEFAULT_RANGE = 10  # m (10m)
 
 hlk_ld8001h_ns = cg.esphome_ns.namespace('hlk_ld8001h')
-HLKLD8001HSensor = hlk_ld8001h_ns.class_('HLKLD8001HSensor', sensor.Sensor, cg.PollingComponent)
+HLKLD8001HSensor = hlk_ld8001h_ns.class_('HLKLD8001HSensor', sensor.Sensor, cg.PollingComponent, uart.UARTDevice)
 
 def validate_config(config):
     # Validate installation_height is within range if provided
@@ -59,12 +59,11 @@ CONFIG_SCHEMA = cv.All(
     ).extend({
         cv.GenerateID(): cv.declare_id(HLKLD8001HSensor),
         cv.Required(CONF_UPDATE_INTERVAL): cv.update_interval,
-        cv.Required(uart.CONF_UART_ID): cv.use_id(uart.UARTComponent),
         cv.Optional(CONF_INSTALLATION_HEIGHT): cv.distance,
         cv.Optional(CONF_RANGE, default=f"{DEFAULT_RANGE}m"): cv.distance,
         cv.Optional(CONF_MODBUS_ADDRESS, default=0x01): cv.hex_uint8_t,
         cv.Optional(CONF_WATER_DEPTH_SENSOR): cv.use_id(sensor.Sensor),
-    }),
+    }).extend(uart.UART_DEVICE_SCHEMA),
     validate_config
 )
 

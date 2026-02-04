@@ -24,7 +24,7 @@ MIN_REPORT_CYCLE = 50  # ms
 MAX_REPORT_CYCLE = 1000  # ms
 
 hlk_ld2413_ns = cg.esphome_ns.namespace('hlk_ld2413')
-HLKLD2413Sensor = hlk_ld2413_ns.class_('HLKLD2413Sensor', sensor.Sensor, cg.PollingComponent)
+HLKLD2413Sensor = hlk_ld2413_ns.class_('HLKLD2413Sensor', sensor.Sensor, cg.PollingComponent, uart.UARTDevice)
 
 def validate_config(config):
     # Validate min_distance is less than max_distance
