@@ -100,7 +100,7 @@ namespace esphome
 					// Valid reading for empty height
 					publish_state(empty_height);
 					this->last_successful_read_ = millis();
-					ESP_LOGD(TAG, "Published empty height: %.1f mm", empty_height);
+					ESP_LOGD(TAG, "Published distance: %.1f mm", empty_height);
 
 					// Read water level if a sensor is attached and installation height is set
 					if (this->water_depth_sensor_ != nullptr && this->has_installation_height_)
