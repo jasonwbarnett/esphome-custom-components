@@ -1,0 +1,26 @@
+esphome:
+  name: vl53l1x-test-short-mode
+
+esp32:
+  board: esp32dev
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [vl53l1x]
+
+logger:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+vl53l1x:
+  distance_mode: short
+  update_interval: 0.5s
+
+sensor:
+  - platform: vl53l1x
+    distance:
+      name: "ToF Distance"

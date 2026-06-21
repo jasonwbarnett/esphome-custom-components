@@ -1,0 +1,31 @@
+esphome:
+  name: vl53l1x-test-sensor
+
+esp32:
+  board: esp32dev
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [vl53l1x]
+
+logger:
+
+i2c:
+  - id: bus_a
+    sda: GPIO21
+    scl: GPIO22
+
+vl53l1x:
+  distance_mode: long
+  update_interval: 0.5s
+
+sensor:
+  - platform: vl53l1x
+    i2c_id: bus_a
+    distance:
+      name: "ToF Distance"
+      id: tof_distance
+    range_status:
+      name: "ToF Range Status"

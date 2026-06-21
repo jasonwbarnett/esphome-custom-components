@@ -1,0 +1,42 @@
+esphome:
+  name: vl53l1x-test-binary-sensor
+
+esp32:
+  board: esp32dev
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [vl53l1x]
+
+logger:
+
+i2c:
+  - id: bus_a
+    sda: GPIO21
+    scl: GPIO22
+
+vl53l1x:
+  distance_mode: long
+  update_interval: 1s
+
+# The binary_sensor platform requires the sensor platform as well: the I2C device
+# is registered by the sensor platform's codegen.
+sensor:
+  - platform: vl53l1x
+    i2c_id: bus_a
+    distance:
+      name: "ToF Distance"
+      id: tof_distance
+
+binary_sensor:
+  - platform: vl53l1x
+    range_valid:
+      name: "ToF Range Valid"
+    above_threshold:
+      name: "ToF Above 1000mm"
+      above_distance: 1000
+    below_threshold:
+      name: "ToF Below 500mm"
+      below_distance: 500

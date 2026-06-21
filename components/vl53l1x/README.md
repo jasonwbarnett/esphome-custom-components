@@ -69,6 +69,38 @@ sensor:
           name: "VL53L1X Range Status"
 ```
 
+## Binary Sensors
+
+In addition to the `sensor` platform, a `binary_sensor` platform exposes
+threshold and validity sensors derived from the measured distance. The
+`binary_sensor` platform requires the `sensor` platform to also be configured on
+the same device (the I2C device is registered by the `sensor` platform).
+
+-   **range_valid**: `on` when the latest measurement has a valid range status.
+-   **above_threshold**: `on` when the measured distance is greater than
+    `above_distance` (mm). Forced `off` while the range status is not valid.
+-   **below_threshold**: `on` when the measured distance is less than
+    `below_distance` (mm). Forced `off` while the range status is not valid.
+
+```yaml
+sensor:
+    - platform: vl53l1x
+      distance:
+          name: "VL53L1X Distance"
+          id: tof_distance
+
+binary_sensor:
+    - platform: vl53l1x
+      range_valid:
+          name: "VL53L1X Range Valid"
+      above_threshold:
+          name: "VL53L1X Above 1000mm"
+          above_distance: 1000 # mm
+      below_threshold:
+          name: "VL53L1X Below 500mm"
+          below_distance: 500 # mm
+```
+
 ## Filtering Example
 
 This example shows how to filter out invalid readings and apply a median filter to stabilize measurements:
