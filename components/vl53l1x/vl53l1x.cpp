@@ -209,6 +209,8 @@ static const uint16_t TIMING_BUDGET = 500;  // new timing budget is maximum allo
 static const uint16_t LOOP_TIME     =  90;  // loop executes every 90ms
 static const uint8_t  MAX_IO_ERRORS  =    5; // consecutive I2C failures before recovering
 static const uint32_t FREEZE_TIMEOUT = 5000; // no successful ranging frame this long (ms) => sensor hung => recover
+static const uint16_t INTERMEASUREMENT_MARGIN = 10; // ms over timing budget for the inter-measurement period
+                                                    // (datasheet/UM2356 require IMP > timing budget + 4ms)
 
 // Sensor Initialisation
 void VL53L1XComponent::setup() {
@@ -292,13 +294,22 @@ bool VL53L1XComponent::init_sensor() {
   }
 
   if (!this->set_timing_budget(TIMING_BUDGET)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
-  if (!this->set_intermeasurement_period(TIMING_BUDGET)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  // Inter-measurement period MUST be > timing budget + 4ms (UM2356), else the
+  // autonomous scheduler is invalid and continuous mode stalls after one frame.
+  // Keep it valid for both modes (it's simply unused in one-shot).
+  if (!this->set_intermeasurement_period(TIMING_BUDGET + INTERMEASUREMENT_MARGIN)) {
+    this->error_code_ = COMMUNICATION_FAILED; return false;
+  }
   if (!this->set_distance_mode(this->distance_mode_)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
-  // Arm a single (one-shot) measurement; loop() re-arms after each frame. This
-  // unit's continuous mode (0x40) emits only one frame and never auto-restarts,
-  // so we drive one-shot (0x10) explicitly — verified to range continuously.
-  if (!this->start_oneshot_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  // Start ranging in the configured mode:
+  //  - CONTINUOUS (0x40): the sensor auto-ranges on its inter-measurement timer;
+  //    loop() clears the interrupt after each frame to release the next.
+  //  - ONE_SHOT (0x10, default): loop() explicitly re-arms each frame. Robust on
+  //    modules whose continuous-mode auto-restart misbehaves.
+  bool started = (this->ranging_mode_ == CONTINUOUS) ? this->start_ranging()
+                                                     : this->start_oneshot_ranging();
+  if (!started) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
   this->error_code_ = NONE;
   return true;
@@ -366,8 +377,10 @@ void VL53L1XComponent::dump_config() {
           ESP_LOGCONFIG(TAG, "  Distance Mode: LONG");
         }
       }
-      ESP_LOGD(TAG, "  Timing Budget: %ims",TIMING_BUDGET);
-      ESP_LOGD(TAG, "  Intermediate Period: %ims",TIMING_BUDGET);
+      ESP_LOGCONFIG(TAG, "  Ranging Mode: %s",
+                    this->ranging_mode_ == CONTINUOUS ? "continuous" : "one-shot");
+      ESP_LOGD(TAG, "  Timing Budget: %ims", TIMING_BUDGET);
+      ESP_LOGD(TAG, "  Inter-measurement Period: %ims", TIMING_BUDGET + INTERMEASUREMENT_MARGIN);
       LOG_I2C_DEVICE(this);
       LOG_UPDATE_INTERVAL(this);
       LOG_SENSOR("  ", "Distance Sensor:", this->distance_sensor_);
@@ -399,11 +412,11 @@ void VL53L1XComponent::loop() {
     return;
 
   // --- Freeze recovery via frame freshness ---
-  // We drive the sensor in ONE-SHOT mode (re-armed each frame below) because
-  // continuous mode only ever emits a single frame on this unit before halting.
-  // A healthy one-shot loop produces a frame every ~timing-budget (~500ms), so if
-  // we go FREEZE_TIMEOUT without a successful frame the sensor (or bus) has hung —
-  // reinitialise it in place. A live sensor never trips this; a real hang always does.
+  // A healthy loop produces a frame every ~timing-budget (~500ms) in either mode,
+  // so if we go FREEZE_TIMEOUT without a successful frame the sensor (or bus) has
+  // hung — reinitialise it in place. A live sensor never trips this; a real hang
+  // always does. (This is also what catches a one-frame-then-halt in continuous
+  // mode if a given module misbehaves there.)
   if ((millis() - this->last_frame_ms_) > FREEZE_TIMEOUT) {
     ESP_LOGW(TAG, "No ranging frame for %ums — sensor halted, recovering",
              (unsigned)(millis() - this->last_frame_ms_));
@@ -419,16 +432,26 @@ void VL53L1XComponent::loop() {
   }
 
   if (!is_dataready) {
-    this->io_error_streak_ = 0;  // bus is fine, one-shot measurement still in flight
+    this->io_error_streak_ = 0;  // bus is fine, the measurement is still in flight
     return;
   }
 
-  // Frame ready: read distance + status, then arm the NEXT one-shot measurement
-  // (start_oneshot_ranging() also clears the interrupt). Explicit re-arming is
-  // required here — continuous mode's auto-restart does not fire on this sensor.
+  // Frame ready: read the result FIRST (distance + status)...
   uint16_t distance = 0;
-  if (!this->get_distance(&distance) || !this->get_range_status() ||
-      !this->start_oneshot_ranging()) {
+  if (!this->get_distance(&distance) || !this->get_range_status()) {
+    if (++this->io_error_streak_ >= MAX_IO_ERRORS)
+      this->recover();
+    return;
+  }
+
+  // ...THEN release/arm the next measurement (must come after the read):
+  //  - CONTINUOUS: clear the interrupt — mandatory for the next ranging data to
+  //    update; the sensor's own inter-measurement timer schedules the next frame.
+  //  - ONE_SHOT:   explicitly re-arm (start_oneshot_ranging() also clears it),
+  //    since some modules never auto-restart in continuous mode.
+  bool armed = (this->ranging_mode_ == CONTINUOUS) ? this->clear_interrupt()
+                                                   : this->start_oneshot_ranging();
+  if (!armed) {
     if (++this->io_error_streak_ >= MAX_IO_ERRORS)
       this->recover();
     return;
@@ -809,9 +832,15 @@ bool VL53L1XComponent::set_intermeasurement_period(uint16_t intermeasurement_ms)
 
   if (!get_timing_budget(&timing_budget_ms)) return false;
 
-  if (intermeasurement_ms < timing_budget_ms) {
-    ESP_LOGW(TAG, "Set Intermeasurement ms < Timing Budget ms");
-    ESP_LOGW(TAG, "OR Timing Budget not set before Intermeasurement Period");
+  // Per UM2356 the inter-measurement period must be GREATER THAN the timing budget
+  // + 4ms; ST's own API rejects anything else with VL53L1_ERROR_INVALID_PARAMS.
+  // The previous check (< timing budget) was too lax — it let imp == timing budget
+  // through, which silently breaks continuous-mode autonomous ranging (one frame
+  // then halt). Enforce the documented rule, and make sure timing budget was set first.
+  if (intermeasurement_ms <= timing_budget_ms + 4) {
+    ESP_LOGW(TAG, "Inter-measurement period (%ums) must be > timing budget (%ums) + 4ms",
+             intermeasurement_ms, timing_budget_ms);
+    ESP_LOGW(TAG, "(also ensure Timing Budget is set before Inter-measurement Period)");
     this->status_set_warning();
     return false;
   }
