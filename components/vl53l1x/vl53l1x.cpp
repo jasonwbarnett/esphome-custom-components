@@ -207,9 +207,7 @@ static const uint8_t VL51L1X_DEFAULT_CONFIGURATION[] = {
 static const uint16_t INIT_TIMEOUT  = 250;  // default timing budget = 100ms, so 250ms should be more than enough time
 static const uint16_t TIMING_BUDGET = 500;  // new timing budget is maximum allowable = 500 ms
 static const uint16_t LOOP_TIME     =  90;  // loop executes every 90ms
-static const uint32_t DATAREADY_TIMEOUT = 5000; // no fresh measurement this long (ms) => ranging stalled => recover
-static const uint16_t STUCK_READY_LOOPS =   30; // data-ready asserted this many loops in a row => interrupt wedged => recover
-static const uint8_t  MAX_IO_ERRORS     =    5; // consecutive I2C failures before recovering
+static const uint8_t  MAX_IO_ERRORS = 5; // consecutive I2C failures before recovering
 
 // Sensor Initialisation
 void VL53L1XComponent::setup() {
@@ -217,8 +215,6 @@ void VL53L1XComponent::setup() {
   for (int attempt = 1; attempt <= 3; attempt++) {
     if (this->init_sensor()) {
       this->sensor_ok_ = true;
-      this->last_dataready_ms_ = millis();
-      this->consecutive_ready_ = 0;
       this->io_error_streak_ = 0;
 #ifdef USE_BINARY_SENSOR
       if (this->range_valid_binary_sensor_)
@@ -315,8 +311,6 @@ void VL53L1XComponent::recover() {
     this->recovery_count_++;
     this->sensor_ok_ = true;
     this->io_error_streak_ = 0;
-    this->last_dataready_ms_ = millis();  // restart the stall timer from a clean slate
-    this->consecutive_ready_ = 0;
     this->status_clear_warning();
     if (this->recovery_count_sensor_ != nullptr)
       this->recovery_count_sensor_->publish_state(this->recovery_count_);
@@ -324,8 +318,6 @@ void VL53L1XComponent::recover() {
   } else {
     // reinit failed (bus likely still wedged) — back off, retry next window
     this->io_error_streak_ = 0;
-    this->last_dataready_ms_ = millis();
-    this->consecutive_ready_ = 0;
     this->status_set_warning();
     ESP_LOGE(TAG, "VL53L1X reinit failed (error_code=%d); will retry", this->error_code_);
   }
@@ -401,41 +393,23 @@ void VL53L1XComponent::loop() {
   if (!this->sensor_ok_)
     return;
 
-  // --- Freeze mode B (ranging stall / stuck-low interrupt): in continuous mode
-  // the sensor completes a measurement every intermeasurement period (~500ms) and
-  // asserts data-ready. If NO fresh measurement arrives for DATAREADY_TIMEOUT —
-  // even though I2C still answers — the ranging engine has stalled, so reinit.
-  // A stationary target still produces fresh measurements, so a parked car never
-  // trips this (that was the bug in the old value-constancy watchdog).
-  if ((millis() - this->last_dataready_ms_) > DATAREADY_TIMEOUT) {
-    ESP_LOGW(TAG, "No fresh measurement for %ums — ranging stalled, recovering", (unsigned) DATAREADY_TIMEOUT);
-    this->recover();
-    return;
-  }
+  // NOTE on freeze detection: a parked car reads a bit-identical distance every
+  // cycle AND this sensor asserts data-ready on nearly every loop, so neither the
+  // distance value nor the data-ready cadence can tell "healthy + stationary"
+  // apart from "frozen" here — every heuristic on those signals false-fired and
+  // churned recoveries. The ONLY false-positive-free trigger is a genuine I2C
+  // transaction error (NACK / bus lock-up), which is also exactly how the
+  // documented VL53L1X freeze manifests. So we recover ONLY on that.
 
   bool is_dataready = false;
   if (!this->check_for_dataready(&is_dataready)) {
-    // I2C error talking to the sensor (no-ACK / bus lock-up)
     if (++this->io_error_streak_ >= MAX_IO_ERRORS)
       this->recover();
     return;
   }
-  this->io_error_streak_ = 0;  // bus answered
 
   if (!is_dataready) {
-    this->consecutive_ready_ = 0;  // interrupt correctly deasserted between measurements
-    return;
-  }
-
-  // --- Freeze mode A (stuck-high interrupt): a healthy sensor reads "ready" on
-  // only ~1 loop per measurement (~500ms apart), then the bit clears until the
-  // next one. If it reads ready on STUCK_READY_LOOPS loops in a row, the interrupt
-  // is wedged asserted and we'd just re-read the same stale value forever. We keep
-  // clearing it on the way up (which may unstick it); only a persistent wedge here
-  // forces a reinit.
-  if (++this->consecutive_ready_ > STUCK_READY_LOOPS) {
-    ESP_LOGW(TAG, "Data-ready stuck asserted %u loops — interrupt wedged, recovering", this->consecutive_ready_);
-    this->recover();
+    this->io_error_streak_ = 0;  // bus is fine, just no new measurement yet
     return;
   }
 
@@ -450,7 +424,6 @@ void VL53L1XComponent::loop() {
 
   this->distance_ = distance;
   this->io_error_streak_ = 0;
-  this->last_dataready_ms_ = millis();  // a fresh measurement was consumed — sensor is alive
 }
 
 void VL53L1XComponent::update() {
