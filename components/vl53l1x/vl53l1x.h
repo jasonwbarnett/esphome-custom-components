@@ -100,13 +100,11 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
   uint16_t sensor_id_{0};
 
   // --- self-heal / freeze-recovery state ---
-  // We recover ONLY on a genuine I2C transaction error (NACK / bus lock-up). On
-  // this geometry a stationary target reads a bit-identical distance and asserts
-  // data-ready nearly every loop, so neither value-constancy nor data-ready
-  // cadence can distinguish "healthy" from "frozen" — both false-fired. A failed
-  // I2C read is the one unambiguous fault signal, and it's how the documented
-  // VL53L1X freeze (bus lock-up) actually presents.
+  // The sensor is driven in one-shot mode (continuous mode only emits one frame
+  // on this unit). Liveness is judged by frame freshness: a healthy loop reads a
+  // frame every ~timing-budget, so no frame for FREEZE_TIMEOUT means it hung.
   uint16_t io_error_streak_{0};          // consecutive I2C failures (bus-lockup detect)
+  uint32_t last_frame_ms_{0};            // millis() of the last successful frame read (freeze detect)
   uint32_t recovery_count_{0};           // total in-place recoveries since boot
   bool sensor_ok_{false};                // have we ever successfully initialised
 

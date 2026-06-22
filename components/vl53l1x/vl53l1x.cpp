@@ -207,7 +207,8 @@ static const uint8_t VL51L1X_DEFAULT_CONFIGURATION[] = {
 static const uint16_t INIT_TIMEOUT  = 250;  // default timing budget = 100ms, so 250ms should be more than enough time
 static const uint16_t TIMING_BUDGET = 500;  // new timing budget is maximum allowable = 500 ms
 static const uint16_t LOOP_TIME     =  90;  // loop executes every 90ms
-static const uint8_t  MAX_IO_ERRORS = 5; // consecutive I2C failures before recovering
+static const uint8_t  MAX_IO_ERRORS  =    5; // consecutive I2C failures before recovering
+static const uint32_t FREEZE_TIMEOUT = 5000; // no successful ranging frame this long (ms) => sensor hung => recover
 
 // Sensor Initialisation
 void VL53L1XComponent::setup() {
@@ -216,6 +217,7 @@ void VL53L1XComponent::setup() {
     if (this->init_sensor()) {
       this->sensor_ok_ = true;
       this->io_error_streak_ = 0;
+      this->last_frame_ms_ = millis();
 #ifdef USE_BINARY_SENSOR
       if (this->range_valid_binary_sensor_)
         this->range_valid_binary_sensor_->publish_state(false);
@@ -293,9 +295,10 @@ bool VL53L1XComponent::init_sensor() {
   if (!this->set_intermeasurement_period(TIMING_BUDGET)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
   if (!this->set_distance_mode(this->distance_mode_)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
-  // start continuous (back-to-back) ranging — in this mode clearing the interrupt
-  // after each read automatically starts the next measurement.
-  if (!this->start_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  // Arm a single (one-shot) measurement; loop() re-arms after each frame. This
+  // unit's continuous mode (0x40) emits only one frame and never auto-restarts,
+  // so we drive one-shot (0x10) explicitly — verified to range continuously.
+  if (!this->start_oneshot_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
   this->error_code_ = NONE;
   return true;
@@ -311,6 +314,7 @@ void VL53L1XComponent::recover() {
     this->recovery_count_++;
     this->sensor_ok_ = true;
     this->io_error_streak_ = 0;
+    this->last_frame_ms_ = millis();
     this->status_clear_warning();
     if (this->recovery_count_sensor_ != nullptr)
       this->recovery_count_sensor_->publish_state(this->recovery_count_);
@@ -318,6 +322,7 @@ void VL53L1XComponent::recover() {
   } else {
     // reinit failed (bus likely still wedged) — back off, retry next window
     this->io_error_streak_ = 0;
+    this->last_frame_ms_ = millis();
     this->status_set_warning();
     ESP_LOGE(TAG, "VL53L1X reinit failed (error_code=%d); will retry", this->error_code_);
   }
@@ -393,13 +398,18 @@ void VL53L1XComponent::loop() {
   if (!this->sensor_ok_)
     return;
 
-  // NOTE on freeze detection: a parked car reads a bit-identical distance every
-  // cycle AND this sensor asserts data-ready on nearly every loop, so neither the
-  // distance value nor the data-ready cadence can tell "healthy + stationary"
-  // apart from "frozen" here — every heuristic on those signals false-fired and
-  // churned recoveries. The ONLY false-positive-free trigger is a genuine I2C
-  // transaction error (NACK / bus lock-up), which is also exactly how the
-  // documented VL53L1X freeze manifests. So we recover ONLY on that.
+  // --- Freeze recovery via frame freshness ---
+  // We drive the sensor in ONE-SHOT mode (re-armed each frame below) because
+  // continuous mode only ever emits a single frame on this unit before halting.
+  // A healthy one-shot loop produces a frame every ~timing-budget (~500ms), so if
+  // we go FREEZE_TIMEOUT without a successful frame the sensor (or bus) has hung —
+  // reinitialise it in place. A live sensor never trips this; a real hang always does.
+  if ((millis() - this->last_frame_ms_) > FREEZE_TIMEOUT) {
+    ESP_LOGW(TAG, "No ranging frame for %ums — sensor halted, recovering",
+             (unsigned)(millis() - this->last_frame_ms_));
+    this->recover();
+    return;
+  }
 
   bool is_dataready = false;
   if (!this->check_for_dataready(&is_dataready)) {
@@ -409,14 +419,16 @@ void VL53L1XComponent::loop() {
   }
 
   if (!is_dataready) {
-    this->io_error_streak_ = 0;  // bus is fine, just no new measurement yet
+    this->io_error_streak_ = 0;  // bus is fine, one-shot measurement still in flight
     return;
   }
 
-  // Data ready: read distance + status, then clear the interrupt. In continuous
-  // mode clearing the interrupt starts the next measurement — no stop/start churn.
+  // Frame ready: read distance + status, then arm the NEXT one-shot measurement
+  // (start_oneshot_ranging() also clears the interrupt). Explicit re-arming is
+  // required here — continuous mode's auto-restart does not fire on this sensor.
   uint16_t distance = 0;
-  if (!this->get_distance(&distance) || !this->get_range_status() || !this->clear_interrupt()) {
+  if (!this->get_distance(&distance) || !this->get_range_status() ||
+      !this->start_oneshot_ranging()) {
     if (++this->io_error_streak_ >= MAX_IO_ERRORS)
       this->recover();
     return;
@@ -424,6 +436,7 @@ void VL53L1XComponent::loop() {
 
   this->distance_ = distance;
   this->io_error_streak_ = 0;
+  this->last_frame_ms_ = millis();
 }
 
 void VL53L1XComponent::update() {
