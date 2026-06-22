@@ -7,7 +7,8 @@ This repository contains custom components for [ESPHome](https://esphome.io/), a
 -   [HLK-LD2413](#hlk-ld2413) - 24GHz mmWave radar liquid level sensor
 -   [HLK-LD8001H](#hlk-ld8001h) - 80GHz mmWave radar liquid level sensor
 -   [Notecard](#notecard) - Blues Wireless Notecard IoT modules
--   [VL53L1X](#vl53l1x) - Time-of-Flight distance sensor
+-   [VL53L1X](#tof400c-vl53l1x) - Time-of-Flight distance sensor (one-shot ranging)
+-   [VL53L1X (Pololu port)](#tof400c-vl53l1x-pololu-port) - Time-of-Flight distance sensor (continuous ranging)
 
 ## HLK LD2413
 
@@ -75,7 +76,9 @@ external_components:
 
 Integration with the VL53L1X/VL53L4CD Time-of-Flight (ToF) distance sensor. Supports both VL53L1X and VL53L4CD with configurable distance modes, a selectable **ranging mode** (one-shot or continuous), and range status reporting.
 
-This I2C component adds **in-place self-healing**: it detects a frozen or I2C-locked sensor and re-initialises it without rebooting the device, exposing an optional recovery counter for diagnostics. The default one-shot ranging mode is robust against the autonomous-ranging quirks seen on some VL53L1X/TOF400C clones (where continuous mode emits a single frame and then halts).
+This I2C component adds **in-place self-healing**: it detects a frozen or I2C-locked sensor and re-initialises it without rebooting the device, exposing an optional recovery counter for diagnostics.
+
+> **Want continuous ranging? Use [VL53L1X (Pololu port)](#tof400c-vl53l1x-pololu-port) instead.** This driver's `continuous` mode one-frame-halts on at least one tested TOF400C — traced to this driver's init sequence, not the hardware. Use this component for **one-shot** ranging (the default).
 
 ### Installation
 
@@ -89,6 +92,24 @@ external_components:
 
 -   [Documentation](components/vl53l1x/README.md)
 -   [Example Configuration](example_vl53l1x.yaml)
+
+## TOF400C VL53L1X (Pololu port)
+
+A second VL53L1X integration that vendors the well-tested [Pololu `vl53l1x-arduino`](https://github.com/pololu/vl53l1x-arduino) driver (transport swapped to ESPHome I2C), driving the sensor in **continuous (autonomous) ranging** at up to ~50 Hz.
+
+Use this when you want continuous ranging. It sustains continuous mode (~10 Hz, verified) on the same TOF400C where the `vl53l1x` driver one-frame-halts — the chip is genuine ST, the difference is the driver. Configurable distance mode / timing budget / inter-measurement period, in-place freeze recovery with a recovery counter, and an optional `frames` proof-of-life sensor.
+
+### Installation
+
+```yaml
+external_components:
+    - source: github://jasonwbarnett/esphome-custom-components
+      components: [vl53l1x_pololu]
+```
+
+**Resources:**
+
+-   [Documentation](components/vl53l1x_pololu/README.md)
 
 ## General Information
 

@@ -2,6 +2,18 @@
 
 This component provides integration with the VL53L1X/VL53L4CD Time-of-Flight (ToF) distance sensor for ESPHome using I2C. This implementation is an adaptation of existing open-source code that has been modified to enhance functionality and compatibility with ESPHome.
 
+> ### ⚠️ Want continuous ranging? Use [`vl53l1x_pololu`](../vl53l1x_pololu) instead.
+>
+> This driver works great in **one-shot** mode (the default), but its **continuous**
+> mode reliably produces only one frame and then halts on at least one tested module
+> (a TOF400C). This was traced to this driver's continuous init sequence — **not** the
+> hardware: the chip fingerprints as genuine ST, and the [`vl53l1x_pololu`](../vl53l1x_pololu)
+> component (a port of Pololu's battle-tested driver) drives the *same board*
+> continuously at ~10 Hz without issue.
+>
+> **If you need continuous ranging, save yourself the debugging and use
+> [`vl53l1x_pololu`](../vl53l1x_pololu).** Use this component for one-shot ranging.
+
 ## Features
 
 -   Supports both VL53L1X and VL53L4CD sensors
@@ -87,7 +99,14 @@ The sensor can be driven two ways via `ranging_mode`:
 
 Per ST application note **UM2356 §2.2**, the inter-measurement period must be **greater than the timing budget + 4 ms** (the sensor's own API rejects anything else with `INVALID_PARAMS`). This component sets a valid period automatically.
 
-> **Caveat:** even with a valid period, some VL53L1X clones — notably certain **TOF400C** boards — emit only a single frame in `continuous` mode and then halt, regardless of configuration. Watch `recovery_count`: if it climbs steadily in `continuous` mode, switch to `one_shot`. This is why `one_shot` is the default.
+> **Caveat — `continuous` may not work on your module:** even with a valid period,
+> this driver's `continuous` mode produces a single frame and then halts on at least
+> one tested **TOF400C** (`recovery_count` climbs as the self-heal re-inits every few
+> seconds). This was traced to **this driver's continuous init sequence, not the
+> hardware** — the chip fingerprints as genuine ST, and the
+> [`vl53l1x_pololu`](../vl53l1x_pololu) port drives the same board continuously at
+> ~10 Hz. So: use `one_shot` here (the default), or switch to
+> [`vl53l1x_pololu`](../vl53l1x_pololu) if you specifically want continuous ranging.
 
 ## Self-healing
 
