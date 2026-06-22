@@ -1,0 +1,29 @@
+esphome:
+  name: vl53l1x-pololu-test
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+external_components:
+  - source:
+      type: local
+      path: ../components
+    components: [vl53l1x_pololu]
+
+logger:
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+vl53l1x_pololu:
+  update_interval: 1s
+
+sensor:
+  - platform: vl53l1x_pololu
+    distance:
+      name: "ToF Distance"
+    frames:
+      name: "ToF Frames"
