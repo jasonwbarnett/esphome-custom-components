@@ -108,6 +108,13 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
   uint32_t recovery_count_{0};           // total in-place recoveries since boot
   bool sensor_ok_{false};                // have we ever successfully initialised
 
+  // Diagnostic: continuous-mode inter-measurement timing computed at init, logged
+  // once from update() (boot logs aren't visible over the network). Confirms
+  // whether a bad clock_pll is why autonomous ranging stalled after one frame.
+  uint16_t diag_clock_pll_{0};
+  uint32_t diag_imp_{0};
+  bool diag_imp_logged_{true};
+
   uint16_t above_distance_{0};
   uint16_t below_distance_{0};
 

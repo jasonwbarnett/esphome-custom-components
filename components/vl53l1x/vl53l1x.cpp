@@ -499,6 +499,17 @@ void VL53L1XComponent::update() {
   if (this->recovery_count_sensor_ != nullptr)
     this->recovery_count_sensor_->publish_state(this->recovery_count_);
 
+  // Diagnostic (surfaced here, not at init, so it's visible over the network):
+  // what continuous mode WOULD have used for its inter-measurement timer. We drive
+  // one-shot, so this value is unused — it's only here to confirm why autonomous
+  // ranging stalled. clock_pll=0 => the timer was misconfigured.
+  if (!this->diag_imp_logged_) {
+    this->diag_imp_logged_ = true;
+    ESP_LOGD(TAG, "continuous-mode timer @ init: clock_pll=%u -> intermeasurement reg=%u (unused; we drive one-shot)%s",
+             (unsigned) this->diag_clock_pll_, (unsigned) this->diag_imp_,
+             (this->diag_clock_pll_ == 0) ? "  <-- clock_pll=0: autonomous restart was broken" : "");
+  }
+
   this->running_update_ = false;
 }
 
@@ -823,10 +834,14 @@ bool VL53L1XComponent::set_intermeasurement_period(uint16_t intermeasurement_ms)
   }
 
   clock_pll = clock_pll & 0x3FF;
-  //ESP_LOGD(TAG, "set imp clock_pll = %i", clock_pll);
   intermeasurement_period =
     static_cast<uint32_t>(clock_pll * intermeasurement_ms * 1.075);
-  //ESP_LOGD(TAG, "imp =  %i", intermeasurement_period);
+  // Diagnostic: stash the continuous-mode timing for update() to surface once
+  // (boot logs aren't visible over the network). A clock_pll of 0 (or an absurd
+  // period) is the smoking gun for why autonomous ranging stalled after one frame.
+  this->diag_clock_pll_ = clock_pll;
+  this->diag_imp_ = intermeasurement_period;
+  this->diag_imp_logged_ = false;
   if (!this->vl53l1x_write_bytes_16(VL53L1_SYSTEM__INTERMEASUREMENT_PERIOD,
                reinterpret_cast<const uint16_t *>(&intermeasurement_period), 2)) {
     ESP_LOGW(TAG, "Error writing Intermeasurement period");
