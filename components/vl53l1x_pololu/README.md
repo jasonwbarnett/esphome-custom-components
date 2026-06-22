@@ -56,7 +56,7 @@ i2c:
 vl53l1x_pololu:
   distance_mode: long       # short | medium | long   (default: long)
   timing_budget: 50ms       # 20ms–1000ms             (default: 50ms)
-  inter_measurement: 100ms  # must be > timing_budget  (default: 100ms)
+  inter_measurement: 100ms  # must be > timing_budget + 4ms  (default: 100ms)
   update_interval: 1s       # how often values are published
 
 sensor:
@@ -79,8 +79,8 @@ sensor:
   measurement, `20ms`–`1000ms`. Higher = longer range and better repeatability, at
   lower frame rate and higher power.
 - **inter_measurement** (_Optional_, time, default `100ms`): the continuous-ranging
-  cadence. Per ST UM2356 it **must be greater than `timing_budget`** (validated at
-  compile time); a value just above the budget gives the fastest rate.
+  cadence. Per ST UM2356 §2.2 it **must be greater than `timing_budget` + 4 ms**
+  (enforced at compile time); a value just above that gives the fastest rate.
 - **update_interval** (_Optional_, default `60s`): how often the latest values are
   published to the front end. (Ranging itself runs continuously regardless.)
 - standard `i2c` options (`address`, `i2c_id`).

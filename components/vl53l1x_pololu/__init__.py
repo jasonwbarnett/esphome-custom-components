@@ -25,11 +25,12 @@ DISTANCE_MODES = {"short": 0, "medium": 1, "long": 2}
 def _validate(config):
     tb_ms = config[CONF_TIMING_BUDGET].total_milliseconds
     im_ms = config[CONF_INTER_MEASUREMENT].total_milliseconds
-    # Per UM2356 the inter-measurement period must exceed the timing budget (+4ms).
-    if im_ms <= tb_ms:
+    # ST UM2356 sec 2.2: the inter-measurement period must be longer than the
+    # timing budget + 4 ms (the sensor's own API rejects anything else).
+    if im_ms <= tb_ms + 4:
         raise cv.Invalid(
             f"inter_measurement ({im_ms}ms) must be greater than "
-            f"timing_budget ({tb_ms}ms)"
+            f"timing_budget + 4ms (> {tb_ms + 4}ms) per ST UM2356"
         )
     return config
 
