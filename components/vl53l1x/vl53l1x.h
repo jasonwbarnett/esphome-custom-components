@@ -100,9 +100,12 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
   uint16_t sensor_id_{0};
 
   // --- self-heal / freeze-recovery state ---
-  uint16_t last_raw_distance_{0xFFFF};   // last raw reading, to detect a frozen value
-  uint32_t last_change_ms_{0};           // millis() when the raw reading last CHANGED
-  uint16_t io_error_streak_{0};          // consecutive I2C failures
+  // Freeze is detected by loss of FRESH MEASUREMENTS, not by the distance value
+  // staying constant — a stationary target (e.g. a parked car) legitimately reads
+  // the same number every cycle, so value-constancy is NOT a freeze signal.
+  uint32_t last_dataready_ms_{0};        // millis() we last consumed a fresh measurement (stuck-low detect)
+  uint16_t consecutive_ready_{0};        // loops in a row data-ready read asserted (stuck-high detect)
+  uint16_t io_error_streak_{0};          // consecutive I2C failures (bus-lockup detect)
   uint32_t recovery_count_{0};           // total in-place recoveries since boot
   bool sensor_ok_{false};                // have we ever successfully initialised
 
