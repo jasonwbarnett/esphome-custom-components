@@ -24,6 +24,7 @@ jobs:
           - tests/test-sensor.yaml
           - tests/test-binary-sensor.yaml
           - tests/test-short-mode.yaml
+          - tests/test-continuous-mode.yaml
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,6 +44,7 @@ jobs:
           - tests/test-sensor.yaml
           - tests/test-binary-sensor.yaml
           - tests/test-short-mode.yaml
+          - tests/test-continuous-mode.yaml
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
