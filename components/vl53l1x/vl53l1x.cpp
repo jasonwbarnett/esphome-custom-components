@@ -503,7 +503,9 @@ void VL53L1XComponent::update() {
   // what continuous mode WOULD have used for its inter-measurement timer. We drive
   // one-shot, so this value is unused — it's only here to confirm why autonomous
   // ranging stalled. clock_pll=0 => the timer was misconfigured.
-  if (!this->diag_imp_logged_) {
+  // Delay until ~15s uptime so a network/OTA log client is connected to see it
+  // (the value is computed at boot, long before any log client attaches).
+  if (!this->diag_imp_logged_ && millis() > 15000) {
     this->diag_imp_logged_ = true;
     ESP_LOGD(TAG, "continuous-mode timer @ init: clock_pll=%u -> intermeasurement reg=%u (unused; we drive one-shot)%s",
              (unsigned) this->diag_clock_pll_, (unsigned) this->diag_imp_,
