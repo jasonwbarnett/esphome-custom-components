@@ -207,131 +207,126 @@ static const uint8_t VL51L1X_DEFAULT_CONFIGURATION[] = {
 static const uint16_t INIT_TIMEOUT  = 250;  // default timing budget = 100ms, so 250ms should be more than enough time
 static const uint16_t TIMING_BUDGET = 500;  // new timing budget is maximum allowable = 500 ms
 static const uint16_t LOOP_TIME     =  90;  // loop executes every 90ms
+static const uint32_t STUCK_TIMEOUT = 6000; // raw reading unchanged this long (ms) => frozen => recover
+static const uint8_t  MAX_IO_ERRORS =    5; // consecutive I2C failures before recovering
 
 // Sensor Initialisation
 void VL53L1XComponent::setup() {
+  // Retry a few times so a slow/borderline sensor doesn't fail boot outright.
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    if (this->init_sensor()) {
+      this->sensor_ok_ = true;
+      this->last_raw_distance_ = 0xFFFF;
+      this->last_change_ms_ = millis();
+      this->io_error_streak_ = 0;
+#ifdef USE_BINARY_SENSOR
+      if (this->range_valid_binary_sensor_)
+        this->range_valid_binary_sensor_->publish_state(false);
+      if (this->above_threshold_binary_sensor_)
+        this->above_threshold_binary_sensor_->publish_state(false);
+      if (this->below_threshold_binary_sensor_)
+        this->below_threshold_binary_sensor_->publish_state(false);
+#endif
+      if (this->recovery_count_sensor_ != nullptr)
+        this->recovery_count_sensor_->publish_state(0);
+      return;
+    }
+    ESP_LOGW(TAG, "VL53L1X init attempt %d failed (error_code=%d), retrying", attempt, this->error_code_);
+    delay(20);
+  }
+  ESP_LOGE(TAG, "VL53L1X init failed after retries");
+  this->mark_failed();
+}
+
+// Full ST ULD initialisation sequence. Re-callable (used by setup() AND recover()).
+// Returns false and sets error_code_ on any failure, but does NOT mark_failed().
+bool VL53L1XComponent::init_sensor() {
   uint32_t start_time;
   uint8_t state = 0;
-  uint16_t addr;
-  bool is_dataready;
+  bool is_dataready = false;
 
+  // wait for the sensor to finish booting
   start_time = millis();
-  while ((millis() - start_time) < INIT_TIMEOUT ) {
-    if (!this->boot_state(&state)) {
-      this->error_code_ = COMMUNICATION_FAILED;
-      this->mark_failed();
-      return;
-    }
+  while ((millis() - start_time) < INIT_TIMEOUT) {
+    if (!this->boot_state(&state)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
     if (state) break;
   }
+  if (!state) { this->error_code_ = BOOT_TIMEOUT; return false; }
 
-  if (!state) {
-    this->error_code_ = BOOT_TIMEOUT;
-    this->mark_failed();
-    return;
-  }
-
-  for (addr = 0x002D; addr <= 0x0087; addr++) {
-    if (!this->vl53l1x_write_byte(addr,VL51L1X_DEFAULT_CONFIGURATION[addr - 0x002D])) {
-      ESP_LOGE(TAG, "Error writing default configuration: address = 0x%X", addr);
+  // load ST default configuration (0x2D..0x87)
+  for (uint16_t addr = 0x002D; addr <= 0x0087; addr++) {
+    if (!this->vl53l1x_write_byte(addr, VL51L1X_DEFAULT_CONFIGURATION[addr - 0x002D])) {
+      ESP_LOGW(TAG, "Error writing default configuration: address = 0x%X", addr);
       this->error_code_ = COMMUNICATION_FAILED;
-      this->mark_failed();
-      return;
+      return false;
     }
   }
 
-  if (!this->check_sensor_id()) {
-      this->error_code_ = WRONG_CHIP_ID;
-      this->mark_failed();
-      return;
-  }
+  if (!this->check_sensor_id()) { this->error_code_ = WRONG_CHIP_ID; return false; }
 
   // 0xEBAA = VL53L4CD must run with SHORT distance mode
-  if ((this->sensor_id_ == 0xEBAA) && (distance_mode_ == LONG)) {
+  if ((this->sensor_id_ == 0xEBAA) && (this->distance_mode_ == LONG)) {
     this->distance_mode_ = SHORT;
     this->distance_mode_overriden_ = true;
   }
 
-  // kick off initialisation by starting ranging
-  if (!this->start_ranging()) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
-
+  // one ranging cycle to settle calibration
+  if (!this->start_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
   start_time = millis();
-  while ((millis() - start_time) < INIT_TIMEOUT ) {
-    // ranging started now wait for data ready
-    if (!this->check_for_dataready(&is_dataready)) {
-      this->error_code_ = COMMUNICATION_FAILED;
-      this->mark_failed();
-      return;
-    }
+  while ((millis() - start_time) < INIT_TIMEOUT) {
+    if (!this->check_for_dataready(&is_dataready)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
     if (is_dataready) break;
   }
-
-  if (!is_dataready) {
-    this->error_code_ = DATAREADY_TIMEOUT;
-    this->mark_failed();
-    return;
-  }
-
-  if (!this->clear_interrupt()) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
-
-  if (!this->stop_ranging()) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
+  if (!is_dataready) { this->error_code_ = DATAREADY_TIMEOUT; return false; }
+  if (!this->clear_interrupt()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  if (!this->stop_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
   if (!this->write_byte(VL53L1_VHV_CONFIG__TIMEOUT_MACROP_LOOP_BOUND, 0x09)) {
     ESP_LOGW(TAG, "Error writing Config Timeout Macro");
     this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
+    return false;
   }
-  if (!this->write_byte(0x0B, 0))  {
+  if (!this->write_byte(0x0B, 0)) {
     ESP_LOGW(TAG, "Error writing Start VHV from the Previous Temperature");
     this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
+    return false;
   }
 
-  if (!this->set_timing_budget(TIMING_BUDGET)) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
+  if (!this->set_timing_budget(TIMING_BUDGET)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  if (!this->set_intermeasurement_period(TIMING_BUDGET)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
+  if (!this->set_distance_mode(this->distance_mode_)) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
-  if (!this->set_intermeasurement_period(TIMING_BUDGET)) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
+  // start continuous (back-to-back) ranging — in this mode clearing the interrupt
+  // after each read automatically starts the next measurement.
+  if (!this->start_ranging()) { this->error_code_ = COMMUNICATION_FAILED; return false; }
 
-  if (!this->set_distance_mode(distance_mode_)) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
-  }
+  this->error_code_ = NONE;
+  return true;
+}
 
-  if (!this->start_ranging()) {
-    this->error_code_ = COMMUNICATION_FAILED;
-    this->mark_failed();
-    return;
+// Self-healing: re-initialise a stuck/unresponsive sensor IN PLACE. No device reboot,
+// no WiFi drop — just a ~250ms reconfigure. Counts every recovery for visibility.
+void VL53L1XComponent::recover() {
+  ESP_LOGW(TAG, "VL53L1X appears stuck — reinitialising in place (recovery #%u)",
+           (unsigned) (this->recovery_count_ + 1));
+  this->stop_ranging();  // best effort; ignore failure
+  if (this->init_sensor()) {
+    this->recovery_count_++;
+    this->sensor_ok_ = true;
+    this->io_error_streak_ = 0;
+    this->last_raw_distance_ = 0xFFFF;
+    this->last_change_ms_ = millis();  // fresh window to produce a changing reading
+    this->status_clear_warning();
+    if (this->recovery_count_sensor_ != nullptr)
+      this->recovery_count_sensor_->publish_state(this->recovery_count_);
+    ESP_LOGW(TAG, "VL53L1X recovered (total recoveries: %u)", (unsigned) this->recovery_count_);
+  } else {
+    // reinit failed (bus likely still wedged) — back off, retry next window
+    this->io_error_streak_ = 0;
+    this->last_change_ms_ = millis();
+    this->status_set_warning();
+    ESP_LOGE(TAG, "VL53L1X reinit failed (error_code=%d); will retry", this->error_code_);
   }
-#ifdef USE_BINARY_SENSOR
-  if (this->range_valid_binary_sensor_)
-    this->range_valid_binary_sensor_->publish_state(false);
-  if (this->above_threshold_binary_sensor_)
-    this->above_threshold_binary_sensor_->publish_state(false);
-  if (this->below_threshold_binary_sensor_)
-    this->below_threshold_binary_sensor_->publish_state(false);
-#endif
 }
 
 void VL53L1XComponent::dump_config() {
@@ -395,31 +390,49 @@ void VL53L1XComponent::dump_config() {
 }
 
 void VL53L1XComponent::loop() {
-  bool is_dataready;
-  // only run loop if not updating and every LOOP_TIME
-  if (this->running_update_ || ((millis() - this->last_loop_time_) < LOOP_TIME) || this->is_failed() )
+  if (this->running_update_ || this->is_failed())
     return;
+  if ((millis() - this->last_loop_time_) < LOOP_TIME)
+    return;
+  this->last_loop_time_ = millis();
 
+  // --- Self-heal: a live sensor jitters mm-to-mm on EVERY read, even on a
+  // perfectly stationary target. If the RAW reading hasn't changed at all for
+  // STUCK_TIMEOUT, the sensor has frozen (stuck-value lock-up) -> reinit it.
+  if (this->sensor_ok_ && this->last_change_ms_ != 0 &&
+      (millis() - this->last_change_ms_) > STUCK_TIMEOUT) {
+    this->recover();
+    return;
+  }
+
+  bool is_dataready = false;
   if (!this->check_for_dataready(&is_dataready)) {
+    // I2C error talking to the sensor (no-ACK / bus issue)
+    if (++this->io_error_streak_ >= MAX_IO_ERRORS)
+      this->recover();
     return;
   }
 
   if (!is_dataready) {
-    this->last_loop_time_ = millis();
+    this->io_error_streak_ = 0;  // bus is fine, just no new measurement yet
     return;
   }
 
-  // data ready now
-  if (!this->get_distance(&this->distance_)) return;
-  if (!this->clear_interrupt()) return;
-  if (!this->stop_ranging()) return;
-  if(!this->get_range_status()) return;
-
-  if (!this->start_ranging()) {
-    this->mark_failed();
+  // Data ready: read distance + status, then clear the interrupt. In continuous
+  // mode clearing the interrupt starts the next measurement — no stop/start churn.
+  uint16_t distance = 0;
+  if (!this->get_distance(&distance) || !this->get_range_status() || !this->clear_interrupt()) {
+    if (++this->io_error_streak_ >= MAX_IO_ERRORS)
+      this->recover();
     return;
   }
-  this->last_loop_time_ = millis();
+
+  this->distance_ = distance;
+  this->io_error_streak_ = 0;
+  if (distance != this->last_raw_distance_) {
+    this->last_raw_distance_ = distance;
+    this->last_change_ms_ = millis();
+  }
 }
 
 void VL53L1XComponent::update() {
@@ -478,6 +491,10 @@ void VL53L1XComponent::update() {
   else {
     ESP_LOGV(TAG, "No Range data found to publish");
   }
+
+  if (this->recovery_count_sensor_ != nullptr)
+    this->recovery_count_sensor_->publish_state(this->recovery_count_);
+
   this->running_update_ = false;
 }
 

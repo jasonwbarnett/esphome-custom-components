@@ -19,6 +19,7 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
  public:
   void set_distance_sensor(sensor::Sensor *distance_sensor) { distance_sensor_ = distance_sensor; }
   void set_range_status_sensor(sensor::Sensor *range_status_sensor) { range_status_sensor_ = range_status_sensor; }
+  void set_recovery_count_sensor(sensor::Sensor *recovery_count_sensor) { recovery_count_sensor_ = recovery_count_sensor; }
   void config_distance_mode(DistanceMode distance_mode ) { distance_mode_ = distance_mode; }
   
 #ifdef USE_BINARY_SENSOR
@@ -57,6 +58,12 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
     BOOT_TIMEOUT,
   } error_code_{NONE};
 
+  // Full (re-callable) sensor initialisation. Returns false on any failure WITHOUT
+  // marking the component failed, so it can be used both at setup and for recovery.
+  bool init_sensor();
+  // Self-healing: stop + re-initialise a stuck/unresponsive sensor in place.
+  void recover();
+
   bool boot_state(uint8_t *state);
   bool clear_interrupt();
   bool get_interrupt_polarity(uint8_t *interrupt_polarity);
@@ -92,11 +99,19 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
   bool running_update_{false};
   uint16_t sensor_id_{0};
 
+  // --- self-heal / freeze-recovery state ---
+  uint16_t last_raw_distance_{0xFFFF};   // last raw reading, to detect a frozen value
+  uint32_t last_change_ms_{0};           // millis() when the raw reading last CHANGED
+  uint16_t io_error_streak_{0};          // consecutive I2C failures
+  uint32_t recovery_count_{0};           // total in-place recoveries since boot
+  bool sensor_ok_{false};                // have we ever successfully initialised
+
   uint16_t above_distance_{0};
   uint16_t below_distance_{0};
 
   sensor::Sensor *distance_sensor_{nullptr};
   sensor::Sensor *range_status_sensor_{nullptr};
+  sensor::Sensor *recovery_count_sensor_{nullptr};
 
 };
 
