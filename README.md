@@ -19,7 +19,7 @@ The LD2413 is very picky about surroundings and reflections. Enclosures or elect
 
 ```yaml
 external_components:
-    - source: github://Averyy/esphome-custom-components
+    - source: github://jasonwbarnett/esphome-custom-components
       components: [hlk_ld2413]
 ```
 
@@ -41,7 +41,7 @@ There's an optional lens that narrows the beamwidth to ±3 degrees, whereas with
 
 ```yaml
 external_components:
-    - source: github://Averyy/esphome-custom-components
+    - source: github://jasonwbarnett/esphome-custom-components
       components: [hlk_ld8001h]
 ```
 
@@ -61,7 +61,7 @@ The implementation focuses specifically on using the Notecard for data transmiss
 
 ```yaml
 external_components:
-    - source: github://Averyy/esphome-custom-components
+    - source: github://jasonwbarnett/esphome-custom-components
       components: [notecard]
 ```
 
@@ -73,15 +73,15 @@ external_components:
 
 ## TOF400C VL53L1X
 
-Integration with the VL53L1X/VL53L4CD Time-of-Flight (ToF) distance sensor. Supports both VL53L1X and VL53L4CD sensors with configurable distance modes and range status reporting.
+Integration with the VL53L1X/VL53L4CD Time-of-Flight (ToF) distance sensor. Supports both VL53L1X and VL53L4CD with configurable distance modes, a selectable **ranging mode** (one-shot or continuous), and range status reporting.
 
-This I2C component was forked from an existing open source repository after updates caused compatibility issues with my setup. I created this stable version primarily for water level monitoring applications, though I discovered that lens condensation in humid environments could affect reading stability - an important consideration for similar implementations.
+This I2C component adds **in-place self-healing**: it detects a frozen or I2C-locked sensor and re-initialises it without rebooting the device, exposing an optional recovery counter for diagnostics. The default one-shot ranging mode is robust against the autonomous-ranging quirks seen on some VL53L1X/TOF400C clones (where continuous mode emits a single frame and then halts).
 
 ### Installation
 
 ```yaml
 external_components:
-    - source: github://Averyy/esphome-custom-components
+    - source: github://jasonwbarnett/esphome-custom-components
       components: [vl53l1x]
 ```
 

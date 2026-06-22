@@ -15,12 +15,18 @@ enum DistanceMode {
   LONG,
 };
 
+enum RangingMode {
+  ONE_SHOT = 0,  // host explicitly triggers each measurement (default; robust)
+  CONTINUOUS,    // sensor auto-ranges using the inter-measurement period
+};
+
 class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public sensor::Sensor {
  public:
   void set_distance_sensor(sensor::Sensor *distance_sensor) { distance_sensor_ = distance_sensor; }
   void set_range_status_sensor(sensor::Sensor *range_status_sensor) { range_status_sensor_ = range_status_sensor; }
   void set_recovery_count_sensor(sensor::Sensor *recovery_count_sensor) { recovery_count_sensor_ = recovery_count_sensor; }
   void config_distance_mode(DistanceMode distance_mode ) { distance_mode_ = distance_mode; }
+  void config_ranging_mode(RangingMode ranging_mode) { ranging_mode_ = ranging_mode; }
   
 #ifdef USE_BINARY_SENSOR
   void set_above_distance(long above_distance) { above_distance_ = above_distance; }
@@ -38,6 +44,7 @@ class VL53L1XComponent : public PollingComponent, public i2c::I2CDevice, public 
  
  protected:
   DistanceMode distance_mode_;
+  RangingMode ranging_mode_{ONE_SHOT};
 
   uint16_t distance_{0};
 
